@@ -115,6 +115,42 @@
     color: #94a099;
     text-align: center;
   }
+  .default-files-section {
+    margin-top: 28px;
+    padding-top: 22px;
+    border-top: 1px solid var(--line);
+  }
+  .default-files-title {
+    font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+    font-size: 0.85rem;
+    font-weight: 600;
+    color: var(--ink);
+    margin-bottom: 4px;
+  }
+  .default-files-hint {
+    font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+    font-size: 0.78rem;
+    color: #94a099;
+    margin-bottom: 12px;
+  }
+  .default-file-row {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    padding: 8px 0;
+    font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+    font-size: 0.92rem;
+  }
+  .default-file-row input[type="checkbox"] {
+    width: 16px;
+    height: 16px;
+    accent-color: var(--accent);
+    cursor: pointer;
+  }
+  .default-file-row label {
+    cursor: pointer;
+    color: var(--ink);
+  }
 </style>
 </head>
 <body>
@@ -128,6 +164,19 @@
   <input type="file" id="fileInput" multiple accept=".doc,.docx,.ppt,.pptx,.pdf,.jpg,.jpeg,.png,.bmp,.tiff,.webp,.xls,.xlsx,.odt,.odp,.ods">
 
   <div id="fileList"></div>
+
+  {% if default_files %}
+  <div class="default-files-section">
+    <div class="default-files-title">Add standard files at the end</div>
+    <div class="default-files-hint">Selected files are appended after everything above, in this order.</div>
+    {% for fname in default_files %}
+    <div class="default-file-row">
+      <input type="checkbox" id="default_{{ loop.index }}" name="default_files" value="{{ fname }}">
+      <label for="default_{{ loop.index }}">{{ fname }}</label>
+    </div>
+    {% endfor %}
+  </div>
+  {% endif %}
 
   <button id="mergeBtn" disabled>Merge into PDF</button>
   <div id="status"></div>
@@ -143,6 +192,7 @@ const mergeBtn = document.getElementById('mergeBtn');
 const statusEl = document.getElementById('status');
 
 let selectedFiles = [];
+const defaultCheckboxes = document.querySelectorAll('input[name="default_files"]');
 
 dropzone.addEventListener('click', () => fileInput.click());
 dropzone.addEventListener('dragover', (e) => { e.preventDefault(); dropzone.classList.add('dragover'); });
@@ -153,10 +203,16 @@ dropzone.addEventListener('drop', (e) => {
   addFiles(e.dataTransfer.files);
 });
 fileInput.addEventListener('change', () => addFiles(fileInput.files));
+defaultCheckboxes.forEach(cb => cb.addEventListener('change', updateMergeButtonState));
 
 function addFiles(fileListObj) {
   for (const f of fileListObj) selectedFiles.push(f);
   renderList();
+}
+
+function updateMergeButtonState() {
+  const anyDefaultChecked = Array.from(defaultCheckboxes).some(cb => cb.checked);
+  mergeBtn.disabled = selectedFiles.length === 0 && !anyDefaultChecked;
 }
 
 function renderList() {
@@ -172,17 +228,19 @@ function renderList() {
     row.appendChild(removeBtn);
     fileListEl.appendChild(row);
   });
-  mergeBtn.disabled = selectedFiles.length === 0;
+  updateMergeButtonState();
 }
 
 mergeBtn.addEventListener('click', async () => {
-  if (selectedFiles.length === 0) return;
+  const anyDefaultChecked = Array.from(defaultCheckboxes).some(cb => cb.checked);
+  if (selectedFiles.length === 0 && !anyDefaultChecked) return;
   mergeBtn.disabled = true;
   statusEl.textContent = 'Merging... this can take a minute for large files.';
   statusEl.className = '';
 
   const formData = new FormData();
   selectedFiles.forEach(f => formData.append('files', f));
+  defaultCheckboxes.forEach(cb => { if (cb.checked) formData.append('default_files', cb.value); });
 
   try {
     const resp = await fetch('/merge', { method: 'POST', body: formData });
@@ -199,6 +257,9 @@ mergeBtn.addEventListener('click', async () => {
     a.click();
     a.remove();
     statusEl.textContent = 'Done — your merged PDF has downloaded.';
+    selectedFiles = [];
+    defaultCheckboxes.forEach(cb => { cb.checked = false; });
+    renderList();
   } catch (e) {
     statusEl.textContent = e.message;
     statusEl.className = 'error';
