@@ -19,8 +19,19 @@ app.config['MAX_CONTENT_LENGTH'] = 500 * 1024 * 1024  # 500MB safety cap, not a 
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 UPLOAD_DIR = os.path.join(BASE_DIR, "uploads")
 OUTPUT_DIR = os.path.join(BASE_DIR, "outputs")
+DEFAULT_FILES_DIR = os.path.join(BASE_DIR, "default_files")
 os.makedirs(UPLOAD_DIR, exist_ok=True)
 os.makedirs(OUTPUT_DIR, exist_ok=True)
+os.makedirs(DEFAULT_FILES_DIR, exist_ok=True)
+
+
+def list_default_files():
+    """Return sorted list of filenames available in default_files/."""
+    if not os.path.isdir(DEFAULT_FILES_DIR):
+        return []
+    files = [f for f in os.listdir(DEFAULT_FILES_DIR)
+             if os.path.isfile(os.path.join(DEFAULT_FILES_DIR, f))]
+    return sorted(files)
 
 OFFICE_EXTS = {".doc", ".docx", ".ppt", ".pptx", ".xls", ".xlsx", ".odt", ".odp", ".ods", ".rtf"}
 IMAGE_EXTS = {".jpg", ".jpeg", ".png", ".bmp", ".tiff", ".webp", ".gif"}
@@ -154,14 +165,15 @@ def process_single_file(file_path, work_dir):
 
 @app.route("/")
 def index():
-    return render_template("index.html")
+    return render_template("index.html", default_files=list_default_files())
 
 
 @app.route("/merge", methods=["POST"])
 def merge():
     files = request.files.getlist("files")
-    if not files or len(files) == 0:
-        return jsonify({"error": "No files uploaded"}), 400
+    selected_defaults_check = request.form.getlist("default_files")
+    if (not files or len(files) == 0) and not selected_defaults_check:
+        return jsonify({"error": "No files uploaded or selected"}), 400
 
     job_id = str(uuid.uuid4())
     work_dir = os.path.join(UPLOAD_DIR, job_id)
@@ -177,8 +189,8 @@ def merge():
             f.save(path)
             saved_paths.append(path)
 
-        if not saved_paths:
-            return jsonify({"error": "No valid files uploaded"}), 400
+        if not saved_paths and not selected_defaults_check:
+            return jsonify({"error": "No valid files uploaded or selected"}), 400
 
         writer = PdfWriter()
         for path in saved_paths:
@@ -187,6 +199,19 @@ def merge():
                 reader = PdfReader(part)
                 for page in reader.pages:
                     writer.add_page(page)
+
+        # Append selected default files at the very end, in the order the
+        # checkboxes were listed (list_default_files() order == UI order).
+        selected_defaults = request.form.getlist("default_files")
+        available_defaults = set(list_default_files())
+        for fname in list_default_files():
+            if fname in selected_defaults and fname in available_defaults:
+                default_path = os.path.join(DEFAULT_FILES_DIR, fname)
+                pdf_parts = process_single_file(default_path, work_dir)
+                for part in pdf_parts:
+                    reader = PdfReader(part)
+                    for page in reader.pages:
+                        writer.add_page(page)
 
         output_path = os.path.join(OUTPUT_DIR, f"merged_{job_id}.pdf")
         with open(output_path, "wb") as f:
