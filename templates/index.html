@@ -151,6 +151,48 @@
     cursor: pointer;
     color: var(--ink);
   }
+
+  .progress-wrap {
+    display: none;
+    margin-top: 20px;
+  }
+  .progress-wrap.active { display: block; }
+  .progress-pipe {
+    width: 100%;
+    height: 22px;
+    border-radius: 11px;
+    background: #e9e6da;
+    border: 1px solid var(--line);
+    overflow: hidden;
+    position: relative;
+  }
+  .progress-fill {
+    height: 100%;
+    width: 0%;
+    border-radius: 11px;
+    background: linear-gradient(90deg, #2f6f4f, #4fa876, #7cc99a, #4fa876, #2f6f4f);
+    background-size: 200% 100%;
+    animation: flow 1.8s linear infinite;
+    transition: width 0.6s ease;
+  }
+  @keyframes flow {
+    0% { background-position: 0% 50%; }
+    100% { background-position: 200% 50%; }
+  }
+  .progress-label {
+    margin-top: 8px;
+    font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+    font-size: 0.82rem;
+    color: #5c6b62;
+    text-align: center;
+  }
+  .ram-label {
+    margin-top: 4px;
+    font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+    font-size: 0.75rem;
+    color: #94a099;
+    text-align: center;
+  }
 </style>
 </head>
 <body>
@@ -179,6 +221,15 @@
   {% endif %}
 
   <button id="mergeBtn" disabled>Merge into PDF</button>
+
+  <div class="progress-wrap" id="progressWrap">
+    <div class="progress-pipe">
+      <div class="progress-fill" id="progressFill"></div>
+    </div>
+    <div class="progress-label" id="progressLabel">Preparing files...</div>
+    <div class="ram-label" id="ramLabel"></div>
+  </div>
+
   <div id="status"></div>
 
   <div class="formats">Supports: DOCX, DOC, PPTX, PPT, PDF, XLSX, JPG, PNG, and more. Files are processed in the order shown above and deleted from the server right after merging.</div>
@@ -256,12 +307,75 @@ function renderList() {
   updateMergeButtonState();
 }
 
+const progressWrap = document.getElementById('progressWrap');
+const progressFill = document.getElementById('progressFill');
+const progressLabel = document.getElementById('progressLabel');
+const ramLabel = document.getElementById('ramLabel');
+
+let progressInterval = null;
+let ramInterval = null;
+let fakeProgress = 0;
+
+const progressMessages = [
+  'Preparing files...',
+  'Converting documents...',
+  'Preserving formatting...',
+  'Extracting speaker notes...',
+  'Merging pages...',
+  'Almost done...'
+];
+
+function startProgress() {
+  fakeProgress = 0;
+  progressWrap.classList.add('active');
+  progressFill.style.width = '0%';
+  let msgIdx = 0;
+  progressLabel.textContent = progressMessages[0];
+
+  progressInterval = setInterval(() => {
+    if (fakeProgress < 90) {
+      fakeProgress += Math.random() * 6;
+      if (fakeProgress > 90) fakeProgress = 90;
+      progressFill.style.width = fakeProgress + '%';
+    }
+    if (Math.random() < 0.3 && msgIdx < progressMessages.length - 1) {
+      msgIdx++;
+      progressLabel.textContent = progressMessages[msgIdx];
+    }
+  }, 700);
+
+  ramInterval = setInterval(async () => {
+    try {
+      const r = await fetch('/status');
+      const d = await r.json();
+      if (d.used_mb != null) {
+        ramLabel.textContent = `Server memory: ${d.used_mb} MB / ${d.total_mb} MB (${d.percent}%)`;
+      }
+    } catch (e) { /* non-critical */ }
+  }, 1500);
+}
+
+function stopProgress(success) {
+  clearInterval(progressInterval);
+  clearInterval(ramInterval);
+  if (success) {
+    progressFill.style.width = '100%';
+    progressLabel.textContent = 'Done!';
+  }
+  setTimeout(() => {
+    progressWrap.classList.remove('active');
+    progressFill.style.width = '0%';
+    ramLabel.textContent = '';
+  }, success ? 900 : 400);
+}
+
 mergeBtn.addEventListener('click', async () => {
   const anyDefaultChecked = Array.from(defaultCheckboxes).some(cb => cb.checked);
   if (selectedFiles.length === 0 && !anyDefaultChecked) return;
   mergeBtn.disabled = true;
-  statusEl.textContent = 'Merging... this can take a minute for large files.';
+  statusEl.textContent = '';
   statusEl.className = '';
+  startProgress();
 
   const formData = new FormData();
   selectedFiles.forEach(f => formData.append('files', f));
@@ -281,11 +395,13 @@ mergeBtn.addEventListener('click', async () => {
     document.body.appendChild(a);
     a.click();
     a.remove();
+    stopProgress(true);
     statusEl.textContent = 'Done — your merged PDF has downloaded.';
     selectedFiles = [];
     defaultCheckboxes.forEach(cb => { cb.checked = false; });
     renderList();
   } catch (e) {
+    stopProgress(false);
     statusEl.textContent = e.message;
     statusEl.className = 'error';
   } finally {
