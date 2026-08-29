@@ -26,11 +26,11 @@ os.makedirs(DEFAULT_FILES_DIR, exist_ok=True)
 
 
 def list_default_files():
-    """Return sorted list of filenames available in default_files/."""
+    """Return sorted list of filenames available in default_files/, excluding hidden/placeholder files."""
     if not os.path.isdir(DEFAULT_FILES_DIR):
         return []
     files = [f for f in os.listdir(DEFAULT_FILES_DIR)
-             if os.path.isfile(os.path.join(DEFAULT_FILES_DIR, f))]
+             if os.path.isfile(os.path.join(DEFAULT_FILES_DIR, f)) and not f.startswith(".")]
     return sorted(files)
 
 OFFICE_EXTS = {".doc", ".docx", ".ppt", ".pptx", ".xls", ".xlsx", ".odt", ".odp", ".ods", ".rtf"}
@@ -40,16 +40,25 @@ PDF_EXT = ".pdf"
 
 def convert_office_to_pdf(input_path, out_dir):
     """Use LibreOffice headless to convert any office doc to PDF, preserving formatting."""
+    # Use a unique, writable user profile directory per conversion to avoid
+    # lock conflicts / permission issues on constrained hosting environments.
+    profile_dir = os.path.join(out_dir, f"lo_profile_{uuid.uuid4().hex}")
+    os.makedirs(profile_dir, exist_ok=True)
+    env = os.environ.copy()
+    env["HOME"] = out_dir  # ensure a writable HOME for LibreOffice's config
+
     cmd = [
-        "soffice", "--headless", "--norestore",
+        "soffice", "--headless", "--norestore", "--nologo", "--nofirststartwizard",
+        f"-env:UserInstallation=file://{profile_dir}",
         "--convert-to", "pdf", "--outdir", out_dir, input_path
     ]
-    subprocess.run(cmd, check=True, timeout=180,
-                    stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+    result = subprocess.run(cmd, timeout=180,
+                             stdout=subprocess.PIPE, stderr=subprocess.PIPE, env=env)
     base = os.path.splitext(os.path.basename(input_path))[0]
     produced = os.path.join(out_dir, base + ".pdf")
     if not os.path.exists(produced):
-        raise RuntimeError(f"Conversion failed for {input_path}")
+        stderr_msg = result.stderr.decode(errors="ignore")[:400]
+        raise RuntimeError(f"Conversion failed for {os.path.basename(input_path)}: {stderr_msg}")
     return produced
 
 
@@ -184,6 +193,10 @@ def merge():
         for f in files:
             if f.filename == "":
                 continue
+            ext = os.path.splitext(f.filename)[1].lower()
+            allowed = OFFICE_EXTS | IMAGE_EXTS | {PDF_EXT}
+            if ext not in allowed:
+                return jsonify({"error": f"Unsupported file type: {f.filename}. Folders and unsupported file types can't be merged."}), 400
             safe_name = f.filename.replace("/", "_").replace("\\", "_")
             path = os.path.join(work_dir, safe_name)
             f.save(path)
