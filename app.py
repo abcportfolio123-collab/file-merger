@@ -75,14 +75,15 @@ def convert_office_to_pdf(input_path, out_dir, _retry=True):
         base = os.path.splitext(os.path.basename(input_path))[0]
         produced = os.path.join(out_dir, base + ".pdf")
 
-        # Let any lingering soffice.bin child fully exit before the lock releases,
-        # so the next queued conversion doesn't collide on shared sockets/pipes.
-        time.sleep(0.8)
+        # Always fully kill soffice and let memory settle after each conversion,
+        # not just on failure - on memory-constrained hosts (e.g. Render free tier's
+        # 512MB), a lingering process from one conversion can starve the next one.
+        _kill_stray_soffice()
+        time.sleep(1.2)
 
         if not os.path.exists(produced):
             if _retry:
-                _kill_stray_soffice()
-                time.sleep(2)
+                time.sleep(1.5)
             else:
                 stderr_msg = result.stderr.decode(errors="ignore")[:400]
                 raise RuntimeError(f"Conversion failed for {os.path.basename(input_path)}: {stderr_msg}")
