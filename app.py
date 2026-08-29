@@ -2,7 +2,9 @@ import os
 import subprocess
 import tempfile
 import shutil
+import time
 import uuid
+import psutil
 from flask import Flask, request, render_template, send_file, jsonify
 
 from pptx import Presentation
@@ -38,27 +40,55 @@ IMAGE_EXTS = {".jpg", ".jpeg", ".png", ".bmp", ".tiff", ".webp", ".gif"}
 PDF_EXT = ".pdf"
 
 
-def convert_office_to_pdf(input_path, out_dir):
-    """Use LibreOffice headless to convert any office doc to PDF, preserving formatting."""
-    # Use a unique, writable user profile directory per conversion to avoid
-    # lock conflicts / permission issues on constrained hosting environments.
-    profile_dir = os.path.join(out_dir, f"lo_profile_{uuid.uuid4().hex}")
-    os.makedirs(profile_dir, exist_ok=True)
-    env = os.environ.copy()
-    env["HOME"] = out_dir  # ensure a writable HOME for LibreOffice's config
+import threading
 
-    cmd = [
-        "soffice", "--headless", "--norestore", "--nologo", "--nofirststartwizard",
-        f"-env:UserInstallation=file://{profile_dir}",
-        "--convert-to", "pdf", "--outdir", out_dir, input_path
-    ]
-    result = subprocess.run(cmd, timeout=180,
-                             stdout=subprocess.PIPE, stderr=subprocess.PIPE, env=env)
-    base = os.path.splitext(os.path.basename(input_path))[0]
-    produced = os.path.join(out_dir, base + ".pdf")
-    if not os.path.exists(produced):
-        stderr_msg = result.stderr.decode(errors="ignore")[:400]
-        raise RuntimeError(f"Conversion failed for {os.path.basename(input_path)}: {stderr_msg}")
+_soffice_lock = threading.Lock()
+
+
+def _kill_stray_soffice():
+    """Kill any leftover soffice processes that may be holding locks from a crashed prior run."""
+    try:
+        subprocess.run(["pkill", "-9", "-f", "soffice"], stdout=subprocess.DEVNULL,
+                        stderr=subprocess.DEVNULL, timeout=10)
+    except Exception:
+        pass
+
+
+def convert_office_to_pdf(input_path, out_dir, _retry=True):
+    """Use LibreOffice headless to convert any office doc to PDF, preserving formatting.
+    Serialized with a lock and a short settle delay after each run, since running
+    multiple soffice conversions back-to-back can otherwise collide on shared
+    sockets/pipes even with separate profile directories. Retries once on failure."""
+    with _soffice_lock:
+        profile_dir = os.path.join(out_dir, f"lo_profile_{uuid.uuid4().hex}")
+        os.makedirs(profile_dir, exist_ok=True)
+        env = os.environ.copy()
+        env["HOME"] = out_dir
+
+        cmd = [
+            "soffice", "--headless", "--norestore", "--nologo", "--nofirststartwizard",
+            f"-env:UserInstallation=file://{profile_dir}",
+            "--convert-to", "pdf", "--outdir", out_dir, input_path
+        ]
+        result = subprocess.run(cmd, timeout=180,
+                                 stdout=subprocess.PIPE, stderr=subprocess.PIPE, env=env)
+        base = os.path.splitext(os.path.basename(input_path))[0]
+        produced = os.path.join(out_dir, base + ".pdf")
+
+        # Let any lingering soffice.bin child fully exit before the lock releases,
+        # so the next queued conversion doesn't collide on shared sockets/pipes.
+        time.sleep(0.8)
+
+        if not os.path.exists(produced):
+            if _retry:
+                _kill_stray_soffice()
+                time.sleep(2)
+            else:
+                stderr_msg = result.stderr.decode(errors="ignore")[:400]
+                raise RuntimeError(f"Conversion failed for {os.path.basename(input_path)}: {stderr_msg}")
+
+    if not os.path.exists(produced) and _retry:
+        return convert_office_to_pdf(input_path, out_dir, _retry=False)
     return produced
 
 
@@ -175,6 +205,19 @@ def process_single_file(file_path, work_dir):
 @app.route("/")
 def index():
     return render_template("index.html", default_files=list_default_files())
+
+
+@app.route("/status")
+def status():
+    try:
+        vm = psutil.virtual_memory()
+        return jsonify({
+            "used_mb": round(vm.used / (1024 * 1024), 1),
+            "total_mb": round(vm.total / (1024 * 1024), 1),
+            "percent": vm.percent
+        })
+    except Exception:
+        return jsonify({"used_mb": None, "total_mb": None, "percent": None})
 
 
 @app.route("/merge", methods=["POST"])
