@@ -177,6 +177,26 @@ def interleave_slides_and_notes(slides_pdf_path, notes_pdf_path, out_dir, base_n
     return out_path
 
 
+def build_title_page(display_name, out_dir):
+    """Create a single-page PDF showing the given filename, used as a cover
+    page before each file's content in the merged output."""
+    styles = getSampleStyleSheet()
+    title_style = ParagraphStyle(
+        'FileTitle', parent=styles['Title'], fontSize=22, leading=28,
+        alignment=1  # center
+    )
+    safe_id = uuid.uuid4().hex
+    out_path = os.path.join(out_dir, f"title_{safe_id}.pdf")
+
+    doc = SimpleDocTemplate(out_path, pagesize=letter,
+                             topMargin=250, bottomMargin=54, leftMargin=54, rightMargin=54)
+    escaped = (display_name.replace("&", "&amp;")
+               .replace("<", "&lt;").replace(">", "&gt;"))
+    story = [Paragraph(escaped, title_style)]
+    doc.build(story)
+    return out_path
+
+
 def process_single_file(file_path, work_dir):
     """Convert one uploaded file to a PDF path (or list of PDFs), returns list of pdf paths to append."""
     ext = os.path.splitext(file_path)[1].lower()
@@ -251,6 +271,12 @@ def merge():
 
         writer = PdfWriter()
         for path in saved_paths:
+            original_name = os.path.basename(path)
+            title_pdf = build_title_page(original_name, work_dir)
+            title_reader = PdfReader(title_pdf)
+            for pg in title_reader.pages:
+                writer.add_page(pg)
+
             pdf_parts = process_single_file(path, work_dir)
             for part in pdf_parts:
                 reader = PdfReader(part)
@@ -264,6 +290,11 @@ def merge():
         for fname in list_default_files():
             if fname in selected_defaults and fname in available_defaults:
                 default_path = os.path.join(DEFAULT_FILES_DIR, fname)
+                title_pdf = build_title_page(fname, work_dir)
+                title_reader = PdfReader(title_pdf)
+                for pg in title_reader.pages:
+                    writer.add_page(pg)
+
                 pdf_parts = process_single_file(default_path, work_dir)
                 for part in pdf_parts:
                     reader = PdfReader(part)
