@@ -205,8 +205,33 @@ dropzone.addEventListener('drop', (e) => {
 fileInput.addEventListener('change', () => addFiles(fileInput.files));
 defaultCheckboxes.forEach(cb => cb.addEventListener('change', updateMergeButtonState));
 
+const ALLOWED_EXTS = ['.doc', '.docx', '.ppt', '.pptx', '.pdf', '.jpg', '.jpeg', '.png',
+                       '.bmp', '.tiff', '.webp', '.gif', '.xls', '.xlsx', '.odt', '.odp', '.ods'];
+
+function getExt(filename) {
+  const idx = filename.lastIndexOf('.');
+  return idx === -1 ? '' : filename.slice(idx).toLowerCase();
+}
+
 function addFiles(fileListObj) {
-  for (const f of fileListObj) selectedFiles.push(f);
+  const rejected = [];
+  for (const f of fileListObj) {
+    // Folders dropped via drag-and-drop show up with size 0 and no extension in most browsers;
+    // the strongest signal available client-side is an empty/blocked MIME type combined with no matching extension.
+    const ext = getExt(f.name);
+    if (!ALLOWED_EXTS.includes(ext)) {
+      rejected.push(f.name);
+      continue;
+    }
+    selectedFiles.push(f);
+  }
+  if (rejected.length > 0) {
+    statusEl.textContent = `Skipped unsupported item(s): ${rejected.join(', ')}. Folders and unsupported file types can't be merged.`;
+    statusEl.className = 'error';
+  } else if (statusEl.className === 'error') {
+    statusEl.textContent = '';
+    statusEl.className = '';
+  }
   renderList();
 }
 
